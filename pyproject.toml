@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "project-analyser"
+version = "0.1.0"
+description = "Find and search Paratext projects"
+authors = ["David Baines <david_baines@sil.org>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.13"
+sil-machine = "^1.6.2"
+pandas = "^2.2.3"
+dotenv = "^0.9.9"
+openpyxl = "^3.1.5"
+unicodedataplus = "^16.0.0.post1"
+tqdm = "^4.67.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
