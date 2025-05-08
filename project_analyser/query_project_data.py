@@ -150,7 +150,7 @@ def main():
         help="Comma-separated list of SFM markers to query for (e.g., \p,\q,\q1)."
     )
     parser.add_argument(
-        "--query_quotation_punctuation", action="store_true",
+        "--quotes", action="store_true",
         help="Query for projects/books with high usage of 'QUOTATION' punctuation."
     )
     parser.add_argument(
@@ -190,11 +190,11 @@ def main():
         else:
             print("No markers specified for --query_markers.")
 
-    if args.query_quotation_punctuation:
+    if args.quotes:
         query_quotation_punctuation(summary_df, args.top_n_projects, args.top_n_books)
 
-    if not args.query_markers and not args.query_quotation_punctuation:
-        print("No query specified. Use --query_markers or --query_quotation_punctuation.")
+    if not args.query_markers and not args.quotes:
+        print("No query specified. Use --query_markers or --quotes.")
 
 if __name__ == "__main__":
     main()

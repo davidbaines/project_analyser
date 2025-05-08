@@ -113,14 +113,19 @@ def project_contains_filtered_books(project_path: Path, book_filter_list: set) -
         return True
 
     settings_parser = FileParatextProjectSettingsParser(str(project_path))
-    settings = settings_parser.parse()
+    try:
+        settings = settings_parser.parse()
+    except Exception as e: 
+        print(f"Debug: Parsing settings caused Exception {e}.\n Could not parse Settings.xml for {project_path.name}. Assuming it doesn't qualify.")
+        return False
+
     if not settings:
-        # print(f"Debug: Could not parse Settings.xml for {project_path.name} during pre-scan. Assuming it doesn't qualify.")
+        print(f"Debug: Could not parse Settings.xml for {project_path.name} during pre-scan. Assuming it doesn't qualify.")
         return False
 
     # Ensure the settings object has the get_book_file_name method
     if not hasattr(settings, 'get_book_file_name'):
-        # print(f"Debug: Parsed settings for {project_path.name} does not have 'get_book_file_name' method. Assuming it doesn't qualify.")
+        print(f"Debug: Parsed settings for {project_path.name} does not have 'get_book_file_name' method. Assuming it doesn't qualify.")
         return False 
 
     found_books_in_filter = set()
