@@ -149,15 +149,15 @@ def get_project_paths(base_folder, limit_n_projects_to_scan=None, active_book_fi
     only the latest dated version or an undated version is selected.
     If limit_n_projects_to_scan is set, stops scanning after finding that many qualifying projects.
     """
+    base_folder_path = Path(base_folder)
     candidate_paths = []
-    if not os.path.isdir(base_folder):
+    if not base_folder_path.is_dir():
         print(f"Error: Projects folder '{base_folder}' not found or is not a directory.")
         return candidate_paths
 
     qualifying_projects_found_count = 0
-    for item_name in tqdm(os.listdir(base_folder), desc="Scanning for project folders"):
-        item_path = os.path.join(base_folder, item_name)
-        project_path_obj = Path(item_path)
+    for item_path in tqdm(base_folder_path.iterdir(), desc="Scanning for project folders"):
+        project_path_obj = item_path # item_path is already a Path object
         if is_paratext_project_folder(project_path_obj):
             if limit_n_projects_to_scan is not None: # If we are limiting the scan
                 if active_book_filter_for_scan: # And if there's a book filter for qualification
@@ -179,14 +179,14 @@ def get_project_paths(base_folder, limit_n_projects_to_scan=None, active_book_fi
         match = DATE_SUFFIX_PATTERN.match(path.name)
         if match:
             base_name = match.group(1)
-            date_str_group3 = match.group(3) # _yyyy_mm_dd format
-            date_str_group6 = match.group(6) # _yyyymmdd format
-            if date_str_group3: # _yyyy_mm_dd
+            date_obj = None
+            if match.group(3): # _yyyy_mm_dd format
                 year, month, day = int(match.group(3)), int(match.group(4)), int(match.group(5))
-                projects_by_base_name[base_name].append({"path": path, "date": datetime(year, month, day)})
-            elif date_str_group6: # _yyyymmdd
-                year, month, day = int(date_str_group6[:4]), int(date_str_group6[4:6]), int(date_str_group6[6:])
-                projects_by_base_name[base_name].append({"path": path, "date": datetime(year, month, day)})
+                date_obj = datetime(year, month, day)
+            elif match.group(6): # _yyyymmdd format
+                date_str = match.group(6)
+                date_obj = datetime(int(date_str[:4]), int(date_str[4:6]), int(date_str[6:]))
+            projects_by_base_name[base_name].append({"path": path, "date": date_obj})
         else:
             projects_by_base_name[path.name].append({"path": path, "date": None}) # Undated
 
@@ -196,9 +196,9 @@ def get_project_paths(base_folder, limit_n_projects_to_scan=None, active_book_fi
         dated_versions = sorted([v for v in versions if v["date"] is not None], key=lambda x: x["date"], reverse=True)
 
         if dated_versions: # Prefer latest dated version if it exists
-            final_project_paths.append(str(dated_versions[0]["path"]))
+            final_project_paths.append(dated_versions[0]["path"])
         elif undated_versions: # Otherwise, take an undated version if one exists
-            final_project_paths.append(str(undated_versions[0]["path"]))
+            final_project_paths.append(undated_versions[0]["path"])
         # If neither (should not happen if versions list is not empty), nothing is added for this base_name
             
     return final_project_paths
@@ -209,13 +209,14 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
     Analyzes a single Paratext project using sil-machine (or mocks).
     Returns a dictionary containing all collected data for the project.
     """
-    project_name = os.path.basename(project_path)
+    project_path_obj = Path(project_path) # Ensure project_path is a Path object
+    project_name = project_path_obj.name
     print(f"Analyzing project: {project_name}...")
 
     # Initialize data structure for this project
     project_results = {
         "ProjectName": project_name,
-        "ProjectFolderPath": project_path,
+        "ProjectFolderPath": str(project_path_obj), # Store as string for serialization if needed
         "ProcessingStatus": "Success", # Will be updated on error
         "ErrorMessage": "",
         "DateAnalyzed": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -233,13 +234,13 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
 
     try:
         # 1. Check for custom.sty
-        custom_sty_path = os.path.join(project_path, "custom.sty")
-        project_results["HasCustomSty"] = os.path.exists(custom_sty_path)
+        custom_sty_path = project_path_obj / "custom.sty"
+        project_results["HasCustomSty"] = custom_sty_path.exists()
 
         # 2. Attempt to load project settings for LTR/RTL and Script
         # Stylesheet for UsfmTokenizer will be the library's default usfm.sty
         try:
-            settings_parser = FileParatextProjectSettingsParser(project_path)
+            settings_parser = FileParatextProjectSettingsParser(str(project_path_obj))
             settings = settings_parser.parse()
             if settings:
                 if hasattr(settings, 'is_right_to_left'):
@@ -288,7 +289,7 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
         usfm_file_patterns = ["*.SFM", "*.sfm", "*.USFM", "*.usfm"]
         usfm_files = []
         for pattern in usfm_file_patterns:
-            usfm_files.extend(Path(project_path).glob(pattern))
+            usfm_files.extend(project_path_obj.glob(pattern))
         
         if not usfm_files:
             project_results["ProcessingStatus"] = "Warning"
@@ -308,7 +309,7 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
                     continue
                 try:
                     expected_filename_str = settings.get_book_file_name(book_id_from_filter)
-                    expected_file_path = Path(project_path) / expected_filename_str
+                    expected_file_path = project_path_obj / expected_filename_str
                     if expected_file_path.exists():
                         files_to_process.append(expected_file_path)
                     else:
@@ -318,7 +319,7 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
         else:
             # No book filter, or settings/get_book_file_name not available; process all found USFM files
             for pattern in usfm_file_patterns:
-                files_to_process.extend(Path(project_path).glob(pattern))
+                files_to_process.extend(project_path_obj.glob(pattern))
 
         if not files_to_process:
             project_results["ProcessingStatus"] = "Warning"
@@ -478,8 +479,9 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
 # --- Report Generation ---
 def generate_detailed_project_report(project_results, output_folder, num_extreme_words):
     """Generates the detailed XLSX report for a single project."""
+    output_folder_path = Path(output_folder)
     project_name = project_results["ProjectName"]
-    output_path = os.path.join(output_folder, f"{project_name}_details.xlsx")
+    output_path = output_folder_path / f"{project_name}_details.xlsx"
 
     # --- Calculate summary-level aggregates for this single project ---
     project_summary_aggregates = {}
@@ -668,8 +670,8 @@ def collate_master_summary_report(main_output_folder, details_output_folder_over
         "TotalBooksProcessed", "LanguageCode", 
         "DetectedScript", "ScriptDirection", "HasCustomSty",
         "TotalUniqueSFMMarkers_Summary", "TotalSFMMarkerInstances_Summary", "TopNCommonSFMMarkers_Summary",
-        "TotalUniquePunctuationChars", "TotalPunctuationInstances", "TopNCommonPunctuation",
-        f"{num_extreme_words}_ShortestWords", f"{num_extreme_words}_LongestWords",
+        "TotalUniquePunctuationChars_Summary", "TotalPunctuationInstances_Summary", "TopNCommonPunctuation_Summary",
+        f"{num_extreme_words}_ShortestWords_Summary", f"{num_extreme_words}_LongestWords_Summary",
         "PathToDetailedReport", "ProjectFolderPath" # PathToDetailedReport before ProjectFolderPath
     ]
     # Ensure all columns are present, adding any missing ones
@@ -743,12 +745,15 @@ def main():
         print("Error: Output folder not specified via argument or .env file (OUTPUT_FOLDER).")
         return
 
-    os.makedirs(args.output_folder, exist_ok=True)
+    main_output_folder_path = Path(args.output_folder)
+    main_output_folder_path.mkdir(parents=True, exist_ok=True)
     
+    details_output_folder_path = main_output_folder_path
     # If a specific details_output_folder is provided (either by arg or .env), use it and create it.
     if args.details_output_folder:
-        os.makedirs(args.details_output_folder, exist_ok=True)
-        print(f"Detailed reports will be saved in: {args.details_output_folder}")
+        details_output_folder_path = Path(args.details_output_folder)
+        details_output_folder_path.mkdir(parents=True, exist_ok=True)
+        print(f"Detailed reports will be saved in: {details_output_folder_path}")
     
     sfm_exclusion_list_for_summary = [marker.strip() for marker in args.exclude_sfm_summary.split(',') if marker.strip()]
 
@@ -788,12 +793,9 @@ def main():
             print(f"Reached processing limit of {limit_n_projects} projects.")
             break
 
-        project_name = os.path.basename(proj_path)
-        actual_detailed_report_folder = args.output_folder
-        if args.details_output_folder:
-            actual_detailed_report_folder = args.details_output_folder
-        
-        detailed_report_path = os.path.join(actual_detailed_report_folder, f"{project_name}_details.xlsx")
+        # proj_path is already a Path object from get_project_paths if changes applied
+        project_name = proj_path.name 
+        detailed_report_path = details_output_folder_path / f"{project_name}_details.xlsx"
 
         current_project_data = None
         if not args.force and Path(detailed_report_path).exists():
@@ -804,7 +806,7 @@ def main():
             # For this version, if you want a complete summary, use --force or delete old detailed files.
             continue # Skip to the next project
 
-        current_project_data = analyze_project_data(proj_path, args.n_words, active_book_filter)
+        current_project_data = analyze_project_data(str(proj_path), args.n_words, active_book_filter) # analyze_project_data expects str or Path
         current_project_data["ActualDetailedReportPath"] = detailed_report_path # Store where it will be saved
 
         if current_project_data: # If analysis ran (even if it resulted in an error status)
@@ -812,14 +814,14 @@ def main():
                  # Generate detailed report if analysis was successful, or if forced
                  # (even if analysis had warnings, we might still want the report)
                  if current_project_data.get("ProcessingStatus") != "Error in Main Loop": # Avoid if main loop itself failed before analysis
-                    report_generated_successfully = generate_detailed_project_report(current_project_data, actual_detailed_report_folder, args.n_words)
+                    report_generated_successfully = generate_detailed_project_report(current_project_data, str(details_output_folder_path), args.n_words)
                     if report_generated_successfully:
                         projects_processed_count += 1
                     # else: error already printed by generate_detailed_project_report
             # No longer appending to all_project_analysis_results
 
     # After all projects are processed (or limit is reached), collate the master summary
-    collate_master_summary_report(args.output_folder, args.details_output_folder, args.n_words, sfm_exclusion_list_for_summary)
+    collate_master_summary_report(str(main_output_folder_path), str(details_output_folder_path) if args.details_output_folder else None, args.n_words, sfm_exclusion_list_for_summary)
     
     print(f"\nFinished processing. {projects_processed_count} projects had detailed reports generated or updated in this run.")
 
