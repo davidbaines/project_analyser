@@ -43,13 +43,15 @@ try:
     from machine.corpora.usfm_tag import UsfmTextType
     from machine.corpora.usfm_token import UsfmToken, UsfmTokenType
     from machine.corpora.usfm_tokenizer import UsfmTokenizer
-    from machine.corpora.paratext_project_settings import ParatextProjectSettings
-    
+    from machine.corpora.paratext_project_settings import ParatextProjectSettings    
+    SIL_MACHINE_AVAILABLE = True
 except ImportError:
     # This single catch-all can remain if you want a general warning, 
     # or be removed if you prefer individual import errors to halt execution naturally.
     # For development, letting individual ImportErrors occur can be more informative.
+    SIL_MACHINE_AVAILABLE = False
     print("Warning: One or more sil-machine components could not be imported. Functionality may be limited.")
+    print("Warning: Verse counting for Book_Stats sheet will be skipped.")
 
 # --- Configuration & Constants ---
 N_WORDS = 10
@@ -75,8 +77,20 @@ def is_word_char(char):
 
 
 def is_punctuation_char(char):
-    """Determines if a character is punctuation based on Unicode category."""
-    return ud.category(char).startswith('P')
+    """
+    Determines if a character is punctuation, with special attention
+    to characters that can function as quotation marks (e.g., grave accent).
+    This ensures such characters are collected for later analysis by the query script.
+    """
+    category = ud.category(char)
+    # Standard Punctuation categories (e.g., Pd, Ps, Pe, Pc, Po, Pi, Pf)
+    if category.startswith('P'):
+        return True
+    # Specific check for GRAVE ACCENT (U+0060), which is category 'Sk' (Symbol, modifier)
+    # and is often used as a quotation mark.
+    if char == '`': # GRAVE ACCENT itself
+        return True
+    return False
 
 
 def is_paratext_project_folder(candidate_path: Path) -> bool:
@@ -234,6 +248,7 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
         "SFMMarkersByBook": defaultdict(Counter),  # {book_id: Counter(marker: count)}
         "PunctuationByBook": defaultdict(Counter), # {book_id: {char: count}}; used for summary TopN
         "PunctuationByNameAndBook": defaultdict(lambda: defaultdict(int)), # {unicode_name: {book_id: count}}
+        "BookStats": {}, # {book_id: verse_count}
         "AllWordsInProject": [], # Temp list to collect all words for shortest/longest
     }
 
@@ -471,6 +486,59 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
                 most_common_script = script_counts.most_common(1)[0][0]
                 project_results["DetectedScript"] = most_common_script
 
+        # 6. Get verse counts for processed books if sil-machine is available
+        if SIL_MACHINE_AVAILABLE and processed_book_ids:
+            try:
+                # 'settings' is the ParatextProjectSettings object loaded earlier
+                # 'project_path_obj' is the Path to the project
+                if settings: 
+                    corpus = ParatextTextCorpus(str(project_path_obj), settings)
+                    book_verse_counts_detail = defaultdict(set) # Stores {book_id: {(b,c,v) tuples}}
+
+                    for book_id_for_verses in processed_book_ids:
+                        # Ensure we only try for canonical books that were actually processed
+                        if not is_canonical(book_id_for_verses): 
+                            continue
+                        try:
+                            text_obj = corpus.get_text(book_id_for_verses)
+                            
+                            if text_obj:
+                                rows_or_segments_iterator = None
+                                if hasattr(text_obj, 'segments'):
+                                    rows_or_segments_iterator = text_obj.segments
+                                elif hasattr(text_obj, 'get_rows'): # Fallback to get_rows()
+                                    try:
+                                        rows_or_segments_iterator = text_obj.get_rows()
+                                    except Exception as e_get_rows:
+                                        msg_get_rows_err = f"Error calling get_rows() for book {book_id_for_verses} in {project_name} (type: {type(text_obj).__name__}): {e_get_rows}. "
+                                        if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
+                                            project_results["ProcessingStatus"] = "Warning"
+                                        project_results["ErrorMessage"] += msg_get_rows_err
+                                
+                                if rows_or_segments_iterator:
+                                    for row_or_segment in rows_or_segments_iterator:
+                                        # Both TextRow (from get_rows) and Segment (from .segments) should have a .ref
+                                        if hasattr(row_or_segment, 'ref') and row_or_segment.ref:
+                                            # Store unique verse references (book_num, chapter_num, verse_num)
+                                            book_verse_counts_detail[book_id_for_verses].add(
+                                                (row_or_segment.ref.book_num, row_or_segment.ref.chapter_num, row_or_segment.ref.verse_num)
+                                            )
+                                else: # text_obj exists but no way to get segments/rows was found
+                                    msg_no_iterable = f"Text object for book {book_id_for_verses} in {project_name} (type: {type(text_obj).__name__}) provided no means to iterate segments or rows. Cannot count verses. "
+                                    if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
+                                        project_results["ProcessingStatus"] = "Warning"
+                                        project_results["ErrorMessage"] += msg_no_iterable
+                            # else: text_obj is None (book not found in corpus), no error message needed here specifically for verse counting
+                        except Exception as e_corpus_text:
+                            msg_corpus_text_err = f"Error getting/processing text for book {book_id_for_verses} in {project_name} for verse counting: {e_corpus_text}. "
+                            # print(msg_corpus_text_err) # For immediate feedback
+                            pass
+                                
+                    project_results["BookStats"] = {
+                        book: len(verse_tuples_set) for book, verse_tuples_set in book_verse_counts_detail.items()
+                    }
+            except Exception as e_corpus_init:
+                print(f"Warning: Could not get verse counts for {project_name} via ParatextTextCorpus: {e_corpus_init}")
     except Exception as e:
         project_results["ProcessingStatus"] = "Error"
         project_results["ErrorMessage"] = f"Analysis failed: {type(e).__name__}: {str(e)}"
@@ -583,6 +651,23 @@ def generate_detailed_project_report(project_results, output_folder, num_extreme
                 for w in longest: extreme_words_data.append({"Type": "Longest", "Word": w, "Length": len(w)})
             extreme_df = pd.DataFrame(extreme_words_data if extreme_words_data else [], columns=["Type", "Word", "Length"])
             extreme_df.to_excel(writer, sheet_name="Word_Extremes_Project", index=False)
+
+            # Sheet: Book_Stats
+            book_stats_dict = project_results.get("BookStats", {})
+            if book_stats_dict:
+                book_stats_list = [{"BookCode": book, "VerseCount": count} 
+                                   for book, count in book_stats_dict.items()]
+                book_stats_df = pd.DataFrame(book_stats_list, columns=["BookCode", "VerseCount"])
+                
+                # Sort by canonical book order
+                book_stats_df['BookCode'] = pd.Categorical(book_stats_df['BookCode'], categories=BOOK_ORDER, ordered=True)
+                book_stats_df = book_stats_df.sort_values('BookCode').dropna(subset=['BookCode'])
+                if not book_stats_df.empty: # Ensure VerseCount is int if df is not empty
+                    book_stats_df['VerseCount'] = book_stats_df['VerseCount'].astype(int)
+                
+                book_stats_df.to_excel(writer, sheet_name="Book_Stats", index=False)
+            else:
+                pd.DataFrame(columns=["BookCode", "VerseCount"]).to_excel(writer, sheet_name="Book_Stats", index=False)
 
             # Sheet 5: Project_Summary_Data (for this project)
             # Combine basic metadata with calculated aggregates for this sheet

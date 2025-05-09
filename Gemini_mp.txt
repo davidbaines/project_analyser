@@ -1,3 +1,495 @@
+
+David Baines
+Are there any obvious improvements or clean up we can do in the project_analyser.py code?
+
+
+Gemini
+Certainly, let's look at some areas in project_analyser.py where we can make improvements for clarity, consistency, and maintainability.
+
+Here are a few suggestions:
+
+1. Consistent Use of pathlib and Path Operations
+The script already uses pathlib.Path, which is great! We can make its usage more consistent throughout the file, replacing os.path functions where Path objects are involved. This often leads to cleaner and more readable code.
+
+For example, os.path.join(base_folder, item_name) can become Path(base_folder) / item_name, and os.path.basename(project_path) becomes project_path.name if project_path is a Path object.
+
+2. Streamline Date Suffix Parsing in get_project_paths
+The logic for parsing date suffixes (_yyyy_mm_dd and _yyyymmdd) can be slightly condensed. Also, using Path.iterdir() is more idiomatic when working with pathlib.
+
+project_analyser.py
+-21
++22
+    only the latest dated version or an undated version is selected.
+    If limit_n_projects_to_scan is set, stops scanning after finding that many qualifying projects.
+    """
+    base_folder_path = Path(base_folder)
+    candidate_paths = []
+    if not os.path.isdir(base_folder):
+    if not base_folder_path.is_dir():
+        print(f"Error: Projects folder '{base_folder}' not found or is not a directory.")
+        return candidate_paths
+
+    qualifying_projects_found_count = 0
+    for item_name in tqdm(os.listdir(base_folder), desc="Scanning for project folders"):
+        item_path = os.path.join(base_folder, item_name)
+        project_path_obj = Path(item_path)
+    for item_path in tqdm(base_folder_path.iterdir(), desc="Scanning for project folders"):
+        project_path_obj = item_path # item_path is already a Path object
+        if is_paratext_project_folder(project_path_obj):
+            if limit_n_projects_to_scan is not None: # If we are limiting the scan
+                if active_book_filter_for_scan: # And if there's a book filter for qualification
+Unchanged lines
+        match = DATE_SUFFIX_PATTERN.match(path.name)
+        if match:
+            base_name = match.group(1)
+            date_str_group3 = match.group(3) # _yyyy_mm_dd format
+            date_str_group6 = match.group(6) # _yyyymmdd format
+            if date_str_group3: # _yyyy_mm_dd
+            date_obj = None
+            if match.group(3): # _yyyy_mm_dd format
+                year, month, day = int(match.group(3)), int(match.group(4)), int(match.group(5))
+                projects_by_base_name[base_name].append({"path": path, "date": datetime(year, month, day)})
+            elif date_str_group6: # _yyyymmdd
+                year, month, day = int(date_str_group6[:4]), int(date_str_group6[4:6]), int(date_str_group6[6:])
+                projects_by_base_name[base_name].append({"path": path, "date": datetime(year, month, day)})
+                date_obj = datetime(year, month, day)
+            elif match.group(6): # _yyyymmdd format
+                date_str = match.group(6)
+                date_obj = datetime(int(date_str[:4]), int(date_str[4:6]), int(date_str[6:]))
+            projects_by_base_name[base_name].append({"path": path, "date": date_obj})
+        else:
+            projects_by_base_name[path.name].append({"path": path, "date": None}) # Undated
+
+Unchanged lines
+        dated_versions = sorted([v for v in versions if v["date"] is not None], key=lambda x: x["date"], reverse=True)
+
+        if dated_versions: # Prefer latest dated version if it exists
+            final_project_paths.append(str(dated_versions[0]["path"]))
+            final_project_paths.append(dated_versions[0]["path"])
+        elif undated_versions: # Otherwise, take an undated version if one exists
+            final_project_paths.append(str(undated_versions[0]["path"]))
+            final_project_paths.append(undated_versions[0]["path"])
+        # If neither (should not happen if versions list is not empty), nothing is added for this base_name
+            
+    return final_project_paths
+Unchanged lines
+    Analyzes a single Paratext project using sil-machine (or mocks).
+    Returns a dictionary containing all collected data for the project.
+    """
+    project_name = os.path.basename(project_path)
+    project_path_obj = Path(project_path) # Ensure project_path is a Path object
+    project_name = project_path_obj.name
+    print(f"Analyzing project: {project_name}...")
+
+    # Initialize data structure for this project
+    project_results = {
+        "ProjectName": project_name,
+        "ProjectFolderPath": project_path,
+        "ProjectFolderPath": str(project_path_obj), # Store as string for serialization if needed
+        "ProcessingStatus": "Success", # Will be updated on error
+        "ErrorMessage": "",
+        "DateAnalyzed": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+Unchanged lines
+
+    try:
+        # 1. Check for custom.sty
+        custom_sty_path = os.path.join(project_path, "custom.sty")
+        project_results["HasCustomSty"] = os.path.exists(custom_sty_path)
+        custom_sty_path = project_path_obj / "custom.sty"
+        project_results["HasCustomSty"] = custom_sty_path.exists()
+
+        # 2. Attempt to load project settings for LTR/RTL and Script
+        # Stylesheet for UsfmTokenizer will be the library's default usfm.sty
+        try:
+            settings_parser = FileParatextProjectSettingsParser(project_path)
+            settings_parser = FileParatextProjectSettingsParser(str(project_path_obj))
+            settings = settings_parser.parse()
+            if settings:
+                if hasattr(settings, 'is_right_to_left'):
+Unchanged lines
+        usfm_file_patterns = ["*.SFM", "*.sfm", "*.USFM", "*.usfm"]
+        usfm_files = []
+        for pattern in usfm_file_patterns:
+            usfm_files.extend(Path(project_path).glob(pattern))
+            usfm_files.extend(project_path_obj.glob(pattern))
+        
+        if not usfm_files:
+            project_results["ProcessingStatus"] = "Warning"
+Unchanged lines
+                    continue
+                try:
+                    expected_filename_str = settings.get_book_file_name(book_id_from_filter)
+                    expected_file_path = Path(project_path) / expected_filename_str
+                    expected_file_path = project_path_obj / expected_filename_str
+                    if expected_file_path.exists():
+                        files_to_process.append(expected_file_path)
+                    else:
+Unchanged lines
+        else:
+            # No book filter, or settings/get_book_file_name not available; process all found USFM files
+            for pattern in usfm_file_patterns:
+                files_to_process.extend(Path(project_path).glob(pattern))
+                files_to_process.extend(project_path_obj.glob(pattern))
+
+        if not files_to_process:
+            project_results["ProcessingStatus"] = "Warning"
+
+3. Refactor analyze_project_data for Improved Readability
+This function is quite long and handles many distinct steps. Breaking it down into smaller, focused helper functions can significantly improve its readability and maintainability.
+
+Consider these conceptual helpers (implementation details would be more involved):
+
+_parse_project_settings(project_path: Path, project_results: dict): To handle Settings.xml parsing and updating relevant fields in project_results.
+_determine_files_to_process(project_path: Path, book_filter_list: set | None, settings: ParatextProjectSettings | None) -> list[Path]: To encapsulate the logic of selecting which USFM files to process.
+_process_usfm_file_content(content: str, tokenizer: UsfmTokenizer, project_results: dict, book_filter_list: set | None, file_path_for_logging: Path) -> tuple[set[str], list[str]]: This would contain the core token processing loop for a single file's content. It would return the set of processed book IDs from that file and any text sampled for script detection.
+_detect_script_from_sample(text_sample: list[str], project_results: dict): To handle the script detection logic.
+The main analyze_project_data function would then call these helpers, making the overall flow clearer.
+
+Due to the complexity of a full refactor of analyze_project_data into multiple helpers, I'll provide a more focused diff on one part: improving pathlib usage within it (some of which was included above) and ensuring project_path is treated as a Path object. The larger structural refactoring would be a more involved change.
+
+4. Minor pathlib Usage in Report Generation and Main
+Similarly, ensure Path objects are used for constructing output paths in generate_detailed_project_report and main.
+
+project_analyser.py
+-13
++14
+# --- Report Generation ---
+def generate_detailed_project_report(project_results, output_folder, num_extreme_words):
+    """Generates the detailed XLSX report for a single project."""
+    output_folder_path = Path(output_folder)
+    project_name = project_results["ProjectName"]
+    output_path = os.path.join(output_folder, f"{project_name}_details.xlsx")
+    output_path = output_folder_path / f"{project_name}_details.xlsx"
+
+    # --- Calculate summary-level aggregates for this single project ---
+    project_summary_aggregates = {}
+Unchanged lines
+        print("Error: Output folder not specified via argument or .env file (OUTPUT_FOLDER).")
+        return
+
+    os.makedirs(args.output_folder, exist_ok=True)
+    main_output_folder_path = Path(args.output_folder)
+    main_output_folder_path.mkdir(parents=True, exist_ok=True)
+    
+    details_output_folder_path = main_output_folder_path
+    # If a specific details_output_folder is provided (either by arg or .env), use it and create it.
+    if args.details_output_folder:
+        os.makedirs(args.details_output_folder, exist_ok=True)
+        print(f"Detailed reports will be saved in: {args.details_output_folder}")
+        details_output_folder_path = Path(args.details_output_folder)
+        details_output_folder_path.mkdir(parents=True, exist_ok=True)
+        print(f"Detailed reports will be saved in: {details_output_folder_path}")
+    
+    sfm_exclusion_list_for_summary = [marker.strip() for marker in args.exclude_sfm_summary.split(',') if marker.strip()]
+
+Unchanged lines
+            print(f"Reached processing limit of {limit_n_projects} projects.")
+            break
+
+        project_name = os.path.basename(proj_path)
+        actual_detailed_report_folder = args.output_folder
+        if args.details_output_folder:
+            actual_detailed_report_folder = args.details_output_folder
+        
+        detailed_report_path = os.path.join(actual_detailed_report_folder, f"{project_name}_details.xlsx")
+        # proj_path is already a Path object from get_project_paths if changes applied
+        project_name = proj_path.name 
+        detailed_report_path = details_output_folder_path / f"{project_name}_details.xlsx"
+
+        current_project_data = None
+        if not args.force and Path(detailed_report_path).exists():
+Unchanged lines
+            # For this version, if you want a complete summary, use --force or delete old detailed files.
+            continue # Skip to the next project
+
+        current_project_data = analyze_project_data(proj_path, args.n_words, active_book_filter)
+        current_project_data = analyze_project_data(str(proj_path), args.n_words, active_book_filter) # analyze_project_data expects str or Path
+        current_project_data["ActualDetailedReportPath"] = detailed_report_path # Store where it will be saved
+
+        if current_project_data: # If analysis ran (even if it resulted in an error status)
+            if current_project_data.get("ProcessingStatus") != "Error" or args.force:
+                 # Generate detailed report if analysis was successful, or if forced
+                 # (even if analysis had warnings, we might still want the report)
+                 if current_project_data.get("ProcessingStatus") != "Error in Main Loop": # Avoid if main loop itself failed before analysis
+                    report_generated_successfully = generate_detailed_project_report(current_project_data, actual_detailed_report_folder, args.n_words)
+                    report_generated_successfully = generate_detailed_project_report(current_project_data, str(details_output_folder_path), args.n_words)
+                    if report_generated_successfully:
+                        projects_processed_count += 1
+                    # else: error already printed by generate_detailed_project_report
+            # No longer appending to all_project_analysis_results
+
+    # After all projects are processed (or limit is reached), collate the master summary
+    collate_master_summary_report(args.output_folder, args.details_output_folder, args.n_words, sfm_exclusion_list_for_summary)
+    collate_master_summary_report(str(main_output_folder_path), str(details_output_folder_path) if args.details_output_folder else None, args.n_words, sfm_exclusion_list_for_summary)
+    
+    print(f"\nFinished processing. {projects_processed_count} projects had detailed reports generated or updated in this run.")
+
+Summary of Suggested Changes:
+get_project_paths:
+Uses Path(base_folder).iterdir() for iterating directory contents.
+Streamlined date parsing logic.
+Returns a list of Path objects.
+analyze_project_data:
+Ensures project_path is treated as a Path object (project_path_obj).
+Uses project_path_obj / "filename" for path constructions.
+Uses Path.exists() and Path.glob().
+generate_detailed_project_report:
+Uses Path(output_folder) and / operator for output_path.
+main:
+Uses Path() for output_folder and details_output_folder, and Path.mkdir().
+Passes path strings to functions that might not be fully Path-aware internally or expect strings (e.g. analyze_project_data as currently written, collate_master_summary_report).
+These changes aim to make the code more robust and idiomatic Python, especially concerning file system interactions. A more extensive refactoring of analyze_project_data would yield further benefits but requires more significant changes to its internal structure. The suggestions above are good starting points for cleanup and improvement.
+
+Rate this answer: 
+Context Sources (2)
+
+David Baines
+The summary sheet is getting data in the TotalUniqueSFMMarkers_Summary TotalSFMMarkerInstances_Summary TopNCommonSFMMarkers_Summary columns. However for the same project rows there is no data in these columns: TotalUniquePunctuationChars TotalPunctuationInstances TopNCommonPunctuation 10_ShortestWords 10_LongestWords
+
+The project detail xlsx file has columns with these names: TotalUniqueSFMMarkers_Project TotalSFMMarkerInstances_Project TopNCommonSFMMarkers_Project TotalUniquePunctuationChars_Project TotalPunctuationInstances_Project TopNCommonPunctuation_Project 10_ShortestWords_Project 10_LongestWords_Project And they all contain data.
+
+
+Gemini
+It looks like there's a mismatch in the expected column names when the master summary report is being assembled.
+
+The collate_master_summary_report function reads data from each detailed project report. In this function, there's a step to rename keys from the detailed report (which end with _Project) to new keys for the master summary (ending with _Summary). This renaming works correctly for all fields, including SFM markers, punctuation, and word extremes.
+
+However, when the final summary_df DataFrame is created and its columns are ordered using summary_column_order, the names for the punctuation and word extreme columns in that list are missing the _Summary suffix. This means the DataFrame is trying to select columns that don't exist under those exact names (e.g., it's looking for TotalUniquePunctuationChars but the data is actually under TotalUniquePunctuationChars_Summary).
+
+The fix is to update the summary_column_order list in collate_master_summary_report to use the _Summary suffix for the punctuation and word extreme columns, just like it does for the SFM marker columns.
+
+Here's the suggested change:
+
+project_analyser.py
+-2
++2
+        "ProjectName", "ProcessingStatus", "ErrorMessage", "DateAnalyzed",
+        "TotalBooksProcessed", "LanguageCode", 
+        "DetectedScript", "ScriptDirection", "HasCustomSty",
+        "TotalUniqueSFMMarkers_Summary", "TotalSFMMarkerInstances_Summary", "TopNCommonSFMMarkers_Summary",
+        "TotalUniquePunctuationChars", "TotalPunctuationInstances", "TopNCommonPunctuation",
+        f"{num_extreme_words}_ShortestWords", f"{num_extreme_words}_LongestWords",
+        "TotalUniquePunctuationChars_Summary", "TotalPunctuationInstances_Summary", "TopNCommonPunctuation_Summary",
+        f"{num_extreme_words}_ShortestWords_Summary", f"{num_extreme_words}_LongestWords_Summary",
+        "PathToDetailedReport", "ProjectFolderPath" # PathToDetailedReport before ProjectFolderPath
+    ]
+    # Ensure all columns are present, adding any missing ones
+
+By making this change, the summary_column_order will correctly reference the column names as they exist in the summary_list after the _Project to _Summary renaming, and the data should populate correctly in the master summary report.
+
+Rate this answer: 
+Context Sources (2)
+
+David Baines
+How involved or complex would it be to try using a multi thread or multi processing system to process the projects more rapidly? I'd like to try that with a new script we can call project_analyser_mp.py - if the script is amenable to such an approach. What considerations and options are there for this?
+
+
+Gemini
+Attempting to parallelize project_analyser.py to process projects more rapidly is a good idea, especially if you have many projects or if individual project analysis is time-consuming. The script, particularly the analyze_project_data function, is reasonably amenable to this, as each project's analysis is largely independent.
+
+Here's a breakdown of the considerations, options, and an estimate of the complexity:
+
+Amenability to Parallelization
+
+Granularity: The most natural unit of work for parallelization is the analysis of a single project. The analyze_project_data function processes one project and generate_detailed_project_report creates its corresponding report. These two can be combined into a single task for a worker process.
+Independence: Each project analysis reads its own files and produces its own results/report. There's minimal shared mutable state between analyses of different projects, which is ideal for parallelization.
+I/O and CPU Bound: Project analysis involves:
+I/O-bound tasks: Reading Settings.xml, USFM files, writing Excel reports.
+CPU-bound tasks: Tokenizing USFM, counting markers, processing text for word/punctuation stats. Both types of tasks can benefit from parallelization, especially with multiprocessing.
+Options for Parallelization: Multithreading vs. Multiprocessing
+
+Multithreading (threading module):
+
+Pros: Lower overhead for creating threads than processes. Easier to share data (though this needs careful synchronization if data is mutable, which is less of a concern here as tasks are mostly independent).
+Cons: Python's Global Interpreter Lock (GIL) means that only one thread can execute Python bytecode at a time in a single process. This significantly limits performance gains for CPU-bound tasks. While it can help with I/O-bound tasks (as threads can release the GIL while waiting for I/O), the CPU-bound parts of your analysis would not see true parallelism. Furthermore, if sil-machine or its underlying libraries are not thread-safe, you could encounter hard-to-debug issues.
+Multiprocessing (multiprocessing module):
+
+Pros: Bypasses the GIL by using separate processes, each with its own Python interpreter and memory space. This allows for true parallelism on multi-core CPUs, benefiting both CPU-bound and I/O-bound parts of your task. It's generally safer if the thread-safety of underlying libraries (like sil-machine) is unknown or questionable, as processes are more isolated.
+Cons: Higher overhead for creating processes. Data sharing between processes requires explicit Inter-Process Communication (IPC) mechanisms (e.g., Queues, Pipes), and data passed must be "picklable" (serializable).
+Recommendation: Multiprocessing
+
+Given the mix of CPU and I/O work, and the potential complexity/unknown thread-safety of sil-machine, multiprocessing is the recommended approach. The multiprocessing.Pool object provides a convenient way to distribute tasks to a pool of worker processes.
+
+How Involved or Complex Would It Be?
+
+Complexity: Moderate.
+
+It's not a trivial change but is definitely achievable. It involves:
+
+Restructuring main(): The main loop that iterates through project_paths and calls analyze_project_data and generate_detailed_project_report sequentially will need to be replaced.
+Creating a Worker Function: You'll define a new function that encapsulates the work for a single project (taking a project path and other necessary args, calling analysis and report generation).
+Using multiprocessing.Pool: To manage a pool of worker processes and distribute the project tasks to them.
+Result/Error Handling: Collecting status (success/failure/error messages) from each worker.
+Progress Indication: The tqdm progress bar will need to be adapted for a multiprocessing context (e.g., using pool.imap_unordered with tqdm or tqdm.contrib.concurrent.process_map).
+Key Considerations and Steps for project_analyser_mp.py:
+
+Worker Function Design:
+
+Create a function, say process_project_task(project_path_str, n_words, book_filter, details_output_folder_str, force_flag).
+Inside this worker:
+It will call analyze_project_data(project_path_str, n_words, book_filter).
+If successful and no error, it will then call generate_detailed_project_report(project_results, details_output_folder_str, n_words).
+It should handle exceptions gracefully and return a status dictionary (e.g., {"project_name": ..., "status": "success/error/skipped", "report_path": ..., "error_message": ...}).
+Modifying main():
+
+get_project_paths() would still run sequentially at the beginning to identify all projects.
+Filter out projects that already have detailed reports and --force is not set before submitting them to the pool to save overhead.
+Create a list of task arguments, where each element is a tuple of arguments for the process_project_task function for one project.
+Initialize a multiprocessing.Pool (e.g., with multiprocessing.Pool(processes=os.cpu_count()) as pool:).
+Use pool.imap_unordered(worker_wrapper, list_of_task_argument_tuples) to submit tasks. imap_unordered is good for tqdm as results come in as they complete. You'll need a simple worker_wrapper function that takes a single tuple argument and unpacks it for process_project_task.
+Iterate over the results from pool.imap_unordered (wrapped with tqdm for progress) to collect statuses and count successes/failures.
+The collate_master_summary_report() function would still run sequentially at the very end, after all worker processes have finished and (hopefully) generated their detailed reports.
+Pickling:
+
+All arguments passed to the worker function and any values returned by it must be picklable by Python's pickle module. Standard Python types (strings, numbers, lists, dicts, tuples) and pathlib.Path objects are generally picklable. Complex custom objects or objects from C extensions might not be. The project_results dictionary should be fine.
+sil-machine Safety:
+
+Multiprocessing creates separate processes, each with its own memory. This generally makes it safer for libraries with complex internal state or C extensions compared to multithreading. Assume sil-machine components will work correctly when instantiated/used in separate processes. If you encounter strange errors, this would be an area to investigate.
+Output and Logging:
+
+print() statements from analyze_project_data (and other parts) running in multiple processes will interleave in the console, which can be messy.
+Options:
+Suppress non-critical prints within the worker.
+Use Python's logging module with a QueueHandler to centralize logging from multiple processes.
+For tqdm, ensure you're using a multiprocessing-aware setup.
+Error Handling:
+
+The worker function must have robust try...except blocks to catch errors during a single project's analysis or report generation. It should return information about the error.
+The main process will then collect these error statuses and can summarize them.
+Resource Management:
+
+Limit the number of worker processes, typically to os.cpu_count() or slightly less, to avoid overwhelming the system.
+Be mindful of memory if projects are extremely large and many are processed concurrently, though Python's per-process memory usage is usually manageable.
+Conceptual Structure in project_analyser_mp.py:
+
+python
+import multiprocessing
+import os
+from pathlib import Path
+from tqdm import tqdm
+
+# ... (import other necessary functions like analyze_project_data, generate_detailed_project_report, etc.)
+# ... (is_paratext_project_folder, get_project_paths, collate_master_summary_report etc. remain mostly the same)
+
+def process_project_task(project_path_str, n_words_arg, book_filter_arg, details_output_folder_str, force_arg):
+    project_name = Path(project_path_str).name
+    # Simplified logic for brevity
+    try:
+        # Note: The original script's logic for skipping existing reports is in main.
+        # If --force is false and report exists, this task might not even be submitted.
+        # Or, the worker can re-check if it's simpler.
+
+        current_project_data = analyze_project_data(project_path_str, n_words_arg, book_filter_arg)
+        
+        if current_project_data.get("ProcessingStatus") == "Error" and not force_arg:
+             return {"project_name": project_name, "status": "analysis_error_not_forced", "error": current_project_data.get("ErrorMessage")}
+
+        # Assuming generate_detailed_project_report handles its own errors and returns True/False
+        report_generated = generate_detailed_project_report(current_project_data, details_output_folder_str, n_words_arg)
+        
+        if report_generated:
+            return {"project_name": project_name, "status": "success", "processing_status": current_project_data.get("ProcessingStatus")}
+        else:
+            return {"project_name": project_name, "status": "report_generation_error", "error": "Detailed report generation failed"}
+
+    except Exception as e:
+        # import traceback # For more detailed error logging if needed
+        # error_details = traceback.format_exc()
+        return {"project_name": project_name, "status": "worker_exception", "error": str(e)}
+
+def worker_wrapper(args_tuple):
+    # Unpacks arguments for the worker function
+    return process_project_task(*args_tuple)
+
+def main_mp(): # Renamed from main
+    # ... (argparse, load_dotenv, setup folders as before) ...
+
+    print(f"Scanning for projects in: {args.projects_folder}")
+    all_project_paths = get_project_paths(args.projects_folder, None, active_book_filter) # Get all, then filter
+
+    if not all_project_paths:
+        print("No Paratext projects found (or none met the filter criteria for initial scan).")
+        return
+
+    tasks_to_submit = []
+    projects_processed_count = 0 # This will now count successful submissions from pool
+
+    # Pre-filter projects to process based on --force and existence of detailed report
+    # and apply limit_n_projects
+    actual_projects_for_pool = []
+    for proj_path in all_project_paths:
+        if limit_n_projects is not None and len(actual_projects_for_pool) >= limit_n_projects:
+            break
+        
+        project_name = proj_path.name
+        detailed_report_path = details_output_folder_path / f"{project_name}_details.xlsx"
+
+        if not args.force and detailed_report_path.exists():
+            print(f"Detailed report for {project_name} already exists. Skipping analysis (use --force to override).")
+            continue
+        actual_projects_for_pool.append(proj_path)
+    
+    if not actual_projects_for_pool:
+        print("No projects to process after filtering for existing reports and limits.")
+        # Still run collate if there might be existing reports from previous runs
+        collate_master_summary_report(str(main_output_folder_path), str(details_output_folder_path) if args.details_output_folder else None, args.n_words, sfm_exclusion_list_for_summary)
+        return
+
+    print(f"Preparing to process {len(actual_projects_for_pool)} project(s) in parallel.")
+
+    task_args_list = [
+        (str(proj_path), args.n_words, active_book_filter, str(details_output_folder_path), args.force)
+        for proj_path in actual_projects_for_pool
+    ]
+
+    num_workers = min(os.cpu_count(), len(task_args_list)) # Don't make more workers than tasks
+    if num_workers == 0 and len(task_args_list) > 0: num_workers = 1
+
+
+    results_from_pool = []
+    if task_args_list: # Only start pool if there are tasks
+        with multiprocessing.Pool(processes=num_workers) as pool:
+            for result in tqdm(pool.imap_unordered(worker_wrapper, task_args_list), total=len(task_args_list), desc="Analyzing projects"):
+                results_from_pool.append(result)
+                if result.get("status") == "success":
+                    projects_processed_count += 1
+                else:
+                    print(f"Warning for project {result.get('project_name', 'Unknown')}: Status {result.get('status')}, Error: {result.get('error', 'N/A')}")
+    
+    # ... (collate_master_summary_report as before) ...
+    collate_master_summary_report(str(main_output_folder_path), str(details_output_folder_path) if args.details_output_folder else None, args.n_words, sfm_exclusion_list_for_summary)
+
+    print(f"\nFinished processing. {projects_processed_count} projects had detailed reports generated or updated successfully in this run via parallel processing.")
+
+
+if __name__ == "__main__":
+    # To run the multiprocessing version:
+    # Ensure this is guarded if your worker functions or other top-level code
+    # might be re-imported by child processes on some OSes (especially Windows).
+    # main_mp()
+    pass # Placeholder for actual call
+In summary, it's a moderately complex task that requires careful refactoring of your main processing loop but offers the potential for significant speedups on multi-core machines. The multiprocessing.Pool approach is well-suited for this.
+
+Rate this answer: 
+Context Sources (2)
+
+David Baines
+Could you create the complete script or is it too long to do that or are there other hinderances?
+
+
+Gemini
+Okay, I can help you create the complete project_analyser_mp.py script. It's not too long, and we can integrate the multiprocessing logic with the existing analysis functions.
+
+The main idea is to:
+
+Keep the core analysis functions (analyze_project_data, generate_detailed_project_report, etc.) largely as they are because they operate on a single project.
+Modify the main function (which we'll call main_mp) to distribute the project processing tasks to a pool of worker processes.
+Define a worker function (process_project_task) that handles the analysis and report generation for a single project.
+Here's the complete script. I've incorporated the necessary functions from project_analyser.py and structured main_mp for parallel execution.
+
+project_analyser_mp.py
+-0
++702
 #!/usr/bin/env python3
 
 # Standard library imports
@@ -45,12 +537,10 @@ try:
     from machine.corpora.usfm_tag import UsfmTextType
     from machine.corpora.usfm_token import UsfmToken, UsfmTokenType
     from machine.corpora.usfm_tokenizer import UsfmTokenizer
-    from machine.corpora.paratext_project_settings import ParatextProjectSettings    
-    SIL_MACHINE_AVAILABLE = True
+    from machine.corpora.paratext_project_settings import ParatextProjectSettings
+
 except ImportError:
-    SIL_MACHINE_AVAILABLE = False
     print("Warning: One or more sil-machine components could not be imported. Functionality may be limited.")
-    print("Warning: Verse counting for Book_Stats sheet will be skipped.")
     # Optionally, re-raise or sys.exit if sil-machine is critical
     # raise
 
@@ -74,20 +564,8 @@ def is_word_char(char):
            category.startswith('M')
 
 def is_punctuation_char(char):
-    """
-    Determines if a character is punctuation, with special attention
-    to characters that can function as quotation marks (e.g., grave accent).
-    This ensures such characters are collected for later analysis by the query script.
-    """
-    category = ud.category(char)
-    # Standard Punctuation categories (e.g., Pd, Ps, Pe, Pc, Po, Pi, Pf)
-    if category.startswith('P'):
-        return True
-    # Specific check for GRAVE ACCENT (U+0060), which is category 'Sk' (Symbol, modifier)
-    # and is often used as a quotation mark.
-    if char == '`': # GRAVE ACCENT itself
-        return True
-    return False
+    """Determines if a character is punctuation based on Unicode category."""
+    return ud.category(char).startswith('P')
 
 def is_paratext_project_folder(candidate_path: Path) -> bool:
     """
@@ -207,7 +685,6 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
         "SFMMarkersByBook": defaultdict(Counter),
         "PunctuationByBook": defaultdict(Counter),
         "PunctuationByNameAndBook": defaultdict(lambda: defaultdict(int)),
-        "BookStats": {}, # {book_id: verse_count}
         "AllWordsInProject": [],
     }
 
@@ -248,8 +725,7 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
         tokenizer = UsfmTokenizer(stylesheet)
 
         usfm_file_patterns = ["*.SFM", "*.sfm", "*.USFM", "*.usfm"]
-        collected_files_for_processing = [] # Use a temporary list to gather all potential files
-
+        files_to_process = []
         if book_filter_list and settings and hasattr(settings, 'get_book_file_name'):
             for book_id_from_filter in book_filter_list:
                 if not is_canonical(book_id_from_filter):
@@ -258,21 +734,13 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
                     expected_filename_str = settings.get_book_file_name(book_id_from_filter)
                     expected_file_path = project_path_obj / expected_filename_str
                     if expected_file_path.exists():
-                        collected_files_for_processing.append(expected_file_path)
+                        files_to_process.append(expected_file_path)
                 except Exception: # Ignore errors getting filename for a specific book
                     pass # Error message for this already handled in project_contains_filtered_books or main loop
         else:
             for pattern in usfm_file_patterns:
-                collected_files_for_processing.extend(project_path_obj.glob(pattern))
+                files_to_process.extend(project_path_obj.glob(pattern))
 
-        # Deduplicate the collected list of file paths
-        if collected_files_for_processing:
-            # Convert to set to remove duplicates, then back to list and sort for consistent processing order
-            files_to_process = sorted(list(set(collected_files_for_processing)))
-        else:
-            files_to_process = []
-
-        # Check if, after deduplication, there are still files to process
         if not files_to_process:
             project_results["ProcessingStatus"] = "Warning"
             project_results["ErrorMessage"] += "No USFM files to process (either none found or none matched filter)."
@@ -375,93 +843,6 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
                 most_common_script = script_counts.most_common(1)[0][0]
                 project_results["DetectedScript"] = most_common_script
 
-        # 6. Get verse counts for processed books if sil-machine is available
-        if SIL_MACHINE_AVAILABLE and processed_book_ids:
-            if not settings: # Check if settings object is valid before proceeding
-                warning_msg_no_settings = f"Verse counting skipped for {project_name}: Paratext project settings could not be loaded. "
-                # print(warning_msg_no_settings) # For immediate feedback if needed
-                if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
-                    project_results["ProcessingStatus"] = "Warning"
-                project_results["ErrorMessage"] += warning_msg_no_settings
-            else: # Settings object exists, proceed with corpus attempt
-                try:
-                    corpus = ParatextTextCorpus(str(project_path_obj), settings)
-                    book_verse_counts_detail = defaultdict(set) # Stores {book_id: {(b,c,v) tuples}}
-
-                    for book_id_for_verses in processed_book_ids:
-                        # Ensure we only try for canonical books that were actually processed
-                        if not is_canonical(book_id_for_verses):
-                            continue
-                        try:
-                            text_obj = corpus.get_text(book_id_for_verses)
-                            if text_obj:
-                                rows_or_segments_iterator = None
-                                if hasattr(text_obj, 'segments'):
-                                    rows_or_segments_iterator = text_obj.segments
-                                elif hasattr(text_obj, 'get_rows'): # Fallback to get_rows()
-                                    try:
-                                        rows_or_segments_iterator = text_obj.get_rows()
-                                    except Exception as e_get_rows:
-                                        msg_get_rows_err = f"Error calling get_rows() for book {book_id_for_verses} in {project_name} (type: {type(text_obj).__name__}): {e_get_rows}. "
-                                        if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
-                                            project_results["ProcessingStatus"] = "Warning"
-                                        project_results["ErrorMessage"] += msg_get_rows_err
-                                
-                                if rows_or_segments_iterator:
-                                    for row_or_segment in rows_or_segments_iterator:
-                                        # Both TextRow (from get_rows) and Segment (from .segments) should have a .ref
-                                        if hasattr(row_or_segment, 'ref') and row_or_segment.ref:
-                                            # Store unique verse references (book_num, chapter_num, verse_num)
-                                            book_verse_counts_detail[book_id_for_verses].add(
-                                                (row_or_segment.ref.book_num, row_or_segment.ref.chapter_num, row_or_segment.ref.verse_num)
-                                            )
-                                else: # text_obj exists but no way to get segments/rows was found
-                                    msg_no_iterable = f"Text object for book {book_id_for_verses} in {project_name} (type: {type(text_obj).__name__}) provided no means to iterate segments or rows. Cannot count verses. "
-                                    if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
-                                        project_results["ProcessingStatus"] = "Warning"
-                                        project_results["ErrorMessage"] += msg_no_iterable
-                            # else: text_obj is None (book not found in corpus), no error message needed here specifically for verse counting
-                                        # Store unique verse references (book_num, chapter_num, verse_num)
-                                        book_verse_counts_detail[book_id_for_verses].add(
-                                            (segment.ref.book_num, segment.ref.chapter_num, segment.ref.verse_num)
-                                        )
-                            # else: # text_obj is None, means book not found in corpus or empty
-                            #     msg_no_text = f"No text segments found for book {book_id_for_verses} in {project_name}. "
-                            #     if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
-                            #         project_results["ProcessingStatus"] = "Warning"
-                            #     project_results["ErrorMessage"] += msg_no_text
-
-                        except Exception as e_corpus_text:
-                            msg_corpus_text_err = f"Error getting/processing text for book {book_id_for_verses} in {project_name} for verse counting: {e_corpus_text}. "
-                            # print(msg_corpus_text_err) # For immediate feedback
-                            if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
-                                project_results["ProcessingStatus"] = "Warning"
-                            project_results["ErrorMessage"] += msg_corpus_text_err
-                    
-                    if not book_verse_counts_detail and processed_book_ids:
-                        # This means we iterated books but found no verses.
-                        msg_no_verses_found = f"No verse references collected for any processed books in {project_name}. BookStats will be empty. Possible reasons: corpus empty, segments have no verse refs, or book text processing issues. "
-                        # print(msg_no_verses_found)
-                        if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
-                             project_results["ProcessingStatus"] = "Warning"
-                        project_results["ErrorMessage"] += msg_no_verses_found
-
-                    project_results["BookStats"] = {
-                        book: len(verse_tuples_set) for book, verse_tuples_set in book_verse_counts_detail.items()
-                    }
-                except Exception as e_corpus_init:
-                    msg_corpus_init_err = f"Could not initialize ParatextTextCorpus for verse counting in {project_name}: {e_corpus_init}. BookStats will be empty. "
-                    # print(msg_corpus_init_err) # For immediate feedback
-                    if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
-                        project_results["ProcessingStatus"] = "Warning"
-                    project_results["ErrorMessage"] += msg_corpus_init_err
-        elif SIL_MACHINE_AVAILABLE and not processed_book_ids: # SIL_MACHINE is available, but no books were identified to process
-            msg_no_books_for_vc = f"Verse counting skipped for {project_name}: No books were processed or identified prior to verse counting stage. "
-            # print(msg_no_books_for_vc)
-            if "Warning" not in project_results["ProcessingStatus"] and "Error" not in project_results["ProcessingStatus"]:
-                project_results["ProcessingStatus"] = "Warning"
-            project_results["ErrorMessage"] += msg_no_books_for_vc
-        # If SIL_MACHINE_AVAILABLE is False, the global warning is printed at the top of the script, and this block is skipped.
     except Exception as e:
         project_results["ProcessingStatus"] = "Error"
         project_results["ErrorMessage"] = f"Analysis failed: {type(e).__name__}: {str(e)}. Trace: {traceback.format_exc()}"
@@ -550,23 +931,6 @@ def generate_detailed_project_report(project_results, output_folder_str, num_ext
                 for w in longest: extreme_words_data.append({"Type": "Longest", "Word": w, "Length": len(w)})
             extreme_df = pd.DataFrame(extreme_words_data if extreme_words_data else [], columns=["Type", "Word", "Length"])
             extreme_df.to_excel(writer, sheet_name="Word_Extremes_Project", index=False)
-
-            # Sheet: Book_Stats
-            book_stats_dict = project_results.get("BookStats", {})
-            if book_stats_dict:
-                book_stats_list = [{"BookCode": book, "VerseCount": count} 
-                                   for book, count in book_stats_dict.items()]
-                book_stats_df = pd.DataFrame(book_stats_list, columns=["BookCode", "VerseCount"])
-                
-                # Sort by canonical book order
-                book_stats_df['BookCode'] = pd.Categorical(book_stats_df['BookCode'], categories=BOOK_ORDER, ordered=True)
-                book_stats_df = book_stats_df.sort_values('BookCode').dropna(subset=['BookCode'])
-                if not book_stats_df.empty: # Ensure VerseCount is int if df is not empty
-                    book_stats_df['VerseCount'] = book_stats_df['VerseCount'].astype(int)
-                
-                book_stats_df.to_excel(writer, sheet_name="Book_Stats", index=False)
-            else:
-                pd.DataFrame(columns=["BookCode", "VerseCount"]).to_excel(writer, sheet_name="Book_Stats", index=False)
 
             summary_data_for_sheet = {**meta_df_data, **{k: [v] for k,v in project_summary_aggregates.items()}}
             expected_summary_cols = meta_cols + list(project_summary_aggregates.keys())
@@ -828,3 +1192,33 @@ if __name__ == "__main__":
     # This guard is crucial for multiprocessing on Windows and good practice elsewhere.
     multiprocessing.freeze_support() # For PyInstaller/cx_Freeze if used
     main_mp()
+Key changes and considerations in this complete script:
+
+Imports: All necessary imports from project_analyser.py are included, plus multiprocessing and traceback.
+Core Functions: is_word_char, is_punctuation_char, is_paratext_project_folder, DATE_SUFFIX_PATTERN, project_contains_filtered_books, get_project_paths, analyze_project_data, generate_detailed_project_report, and collate_master_summary_report are copied over.
+Minor adjustments in analyze_project_data and generate_detailed_project_report for error handling (re-raising exceptions for the worker to catch) and potentially reducing direct print statements that could clutter console output when run in parallel.
+Worker Function (process_project_task):
+Takes all necessary arguments for a single project.
+Calls analyze_project_data and then generate_detailed_project_report.
+Includes robust try...except block to catch any exceptions during the analysis or report generation for a single project.
+Returns a dictionary with status, project name, and any error messages/tracebacks. This is important for the main process to understand what happened in each worker.
+Worker Wrapper (worker_wrapper): A small helper function required by pool.imap_unordered when passing multiple arguments to the target function.
+main_mp() Function:
+Handles argument parsing (similar to the original main, with an added --num_workers argument).
+Loads environment variables.
+Calls get_project_paths to find projects.
+Filters projects (e.g., based on --force and existing reports, limit_n_projects).
+Prepares a list of argument tuples (task_args_list) for each project.
+Uses multiprocessing.Pool with imap_unordered to distribute tasks. imap_unordered is good because results are processed as they complete, which works well with tqdm for progress.
+Iterates through the results from the pool, updating counters for successes and failures and printing error details.
+Calls collate_master_summary_report after all parallel processing is done.
+if __name__ == "__main__"::
+This guard is critical for multiprocessing, especially on Windows, to prevent child processes from re-executing the main script's code.
+multiprocessing.freeze_support() is added, which is good practice and sometimes necessary if you plan to freeze your script into an executable (e.g., with PyInstaller).
+Error Reporting: The worker returns detailed error information, including tracebacks for unexpected exceptions. The main loop in main_mp prints this information.
+tqdm Progress Bar: The tqdm progress bar is used for the initial scan in get_project_paths (run by the main process) and for iterating over the results from the multiprocessing.Pool.
+Print Statements: Direct print statements within analyze_project_data or generate_detailed_project_report (if any remain that are not for critical errors) will come from the worker processes. Their output might be interleaved in the console. For cleaner output, you might consider replacing them with a logging mechanism that can be centralized or by returning more information in the result dictionary from the worker.
+This script should provide a solid foundation for parallel project analysis. Remember to test it thoroughly, especially the error handling and edge cases.
+
+Rate this answer: 
+Context Sources (3)
