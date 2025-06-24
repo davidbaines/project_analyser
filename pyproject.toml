@@ -13,6 +13,8 @@ dotenv = "^0.9.9"
 openpyxl = "^3.1.5"
 unicodedataplus = "^16.0.0.post1"
 tqdm = "^4.67.1"
+regex = "^2024.11.6"
+xlsxwriter = "^3.2.3"
 
 
 [build-system]
