@@ -186,6 +186,38 @@ def get_project_paths(base_folder, limit_n_projects_to_scan=None, active_book_fi
             
     return final_project_paths
 
+def count_usfm_content(content, stylesheet):
+    """
+    Count SFM markers, punctuation, and words in a USFM/SFM content string.
+    Returns: (marker_counts, punctuation_counts, word_counts)
+    """
+    tokenizer = UsfmTokenizer(stylesheet)
+    tokens = tokenizer.tokenize(content)
+    marker_counts = {}
+    punctuation_counts = {}
+    word_counts = {}
+    current_word = ""
+    for token in tokens:
+        if token.marker:
+            marker = token.marker.lower()
+            marker_counts[marker] = marker_counts.get(marker, 0) + 1
+        if hasattr(token, "type") and hasattr(token.type, "name") and token.type.name == "TEXT" and token.text:
+            for c in token.text:
+                if is_word_char(c):
+                    current_word += c
+                else:
+                    if current_word:
+                        word = current_word.lower()
+                        word_counts[word] = word_counts.get(word, 0) + 1
+                        current_word = ""
+                    if is_punctuation_char(c):
+                        punctuation_counts[c] = punctuation_counts.get(c, 0) + 1
+            if current_word:
+                word = current_word.lower()
+                word_counts[word] = word_counts.get(word, 0) + 1
+                current_word = ""
+    return marker_counts, punctuation_counts, word_counts
+
 def analyze_project_data(project_path, num_extreme_words, book_filter_list=None):
     project_path_obj = Path(project_path)
     project_name = project_path_obj.name
@@ -288,11 +320,15 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
             except Exception: # Skip file if unreadable
                 continue 
 
-            usfm_tokens = tokenizer.tokenize(content)
-            current_word = ""
-            current_book_id_for_file = None 
+            # Use the new reusable function for counting
+            marker_counts, punctuation_counts, word_counts = count_usfm_content(content, stylesheet)
+
+            # Now, update project_results using these counts
+            # SFM markers
+            current_book_id_for_file = None
+            usfm_tokens = UsfmTokenizer(stylesheet).tokenize(content)
             currently_in_verse_text_block = False
-            
+            current_word = ""
             for token in usfm_tokens:
                 if token.type == UsfmTokenType.BOOK:
                     book_code_candidate = None
@@ -300,19 +336,11 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
                         book_code_candidate = token.data.strip().upper()
                     elif token.text and isinstance(token.text, str) and token.text.strip() and token.text.upper() != "NONE":
                         book_code_candidate = token.text.strip().upper()
-                    
-                    if book_code_candidate:
-                        if not is_canonical(book_code_candidate): 
-                            current_book_id_for_file = None 
-                            currently_in_verse_text_block = False 
-                            continue
-                        if book_filter_list and book_code_candidate not in book_filter_list:
-                            current_book_id_for_file = None 
-                            currently_in_verse_text_block = False
-                            continue
+                    if book_code_candidate and is_canonical(book_code_candidate):
                         current_book_id_for_file = book_code_candidate
                         processed_book_ids.add(current_book_id_for_file)
-
+                    else:
+                        current_book_id_for_file = None
                 active_book_id_for_counting = current_book_id_for_file
 
                 if token.type == UsfmTokenType.VERSE:
@@ -346,7 +374,7 @@ def analyze_project_data(project_path, num_extreme_words, book_filter_list=None)
                                 current_word = ""
                             if is_punctuation_char(char_in_text):
                                 if active_book_id_for_counting: 
-                                    project_results["PunctuationByBook"][active_book_id_for_counting][char_in_text] += 1
+                                    project_results["PunctuationByBook"][active_book_id_for_counting][char_in_text] += 2
                                     try:
                                         char_name = ud.name(char_in_text)
                                     except ValueError:
@@ -825,6 +853,4 @@ def main_mp():
          print(f"Projects skipped (report existed, no --force): {projects_skipped_existing}")
 
 if __name__ == "__main__":
-    # This guard is crucial for multiprocessing on Windows and good practice elsewhere.
-    multiprocessing.freeze_support() # For PyInstaller/cx_Freeze if used
     main_mp()
